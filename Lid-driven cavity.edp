@@ -1,0 +1,128 @@
+//verbosity = 0;
+load "iovtk"
+
+string directory = "output/";
+
+//Mesh
+int nn = 10;
+mesh Th = square(nn, nn);
+
+plot(Th, dim=2);
+
+savemesh(Th, directory+"mesh.msh");
+
+//FE spaces
+fespace Vh(Th, P2);
+fespace Mh(Th, P1);
+
+Vh u1, u2, uold1, uold2, v1, v2, w1, w2;
+Mh p, q;
+
+real dt = 0.01, t = 0., tmax = 1.;
+real Re = 100.;
+
+real gamma = 1e-7;
+
+real NewtonTol = 1e-9;
+real NewtonMaxIter = 20;
+
+func lid = x* (1. - x)* t;
+
+macro grad(u)(
+	[dx(u), dy(u)]
+	)//
+
+macro Ugradv(u1, u2, v)(
+	u1* dx(v) + u2* dy(v)
+	)//
+
+macro UgradV(u1, u2, v1, v2)(
+	[Ugradv(u1, u2, v1), Ugradv(u1, u2, v2)]
+	)//
+
+macro gradUgradV(u1, u2, v1, v2)(
+	grad(u1)' * grad(v1) + 
+	grad(u2)' * grad(v2)
+	)//
+
+macro div(u1, u2)(
+	dx(u1) + dy(u2)
+	)//
+
+macro a(u1, u2, v1, v2)(
+	int2d(Th)((1./dt)* [u1, u2]'*[v1, v2]) +
+	int2d(Th)(UgradV(uold1, uold2, u1, u2)' * [v1, v2]) +
+	int2d(Th)(UgradV(u1, u2, uold1, uold2)' * [v1, v2]) +
+	int2d(Th)((1./Re)* gradUgradV(u1, u2, v1, v2))
+	)//
+
+macro b(p, v1, v2)(
+	- int2d(Th)(p* div(v1, v2))
+	)//
+
+macro l(v1, v2)(
+	- int2d(Th)((1./dt)* [w1, w2]' * [v1, v2])
+	- int2d(Th)(UgradV(uold1, uold2, uold1, uold2)' * [v1, v2])
+	)//
+
+macro BC(u1, u2)(
+	on(1, 2, 4, u1=0., u2=0.) + on(3, u1=lid, u2=0.)
+	)//
+
+macro normL2(u1, u2)(
+	sqrt(int2d(Th)(square(u1) + square(u2)))
+	)//
+
+//VF
+problem Newton(u1, u2, p, v1, v2, q) = (
+	a(u1, u2, v1, v2) + b(p, v1, v2) + int1d(Th, 3)(p* ([v1, v2]'* N)) 
+	- b(q, u1, u2) + int2d(Th)(gamma* p* q)
+	+ l(v1, v2)
+	+ BC(u1, u2)
+	);
+
+
+// Time loop
+w1 = lid; w2 = 0; p = 0;
+
+int IterMax = tmax/dt;
+for(int Iter = 1; Iter <= IterMax; Iter++){
+
+	t = t + dt;
+
+	cout<<"\n==>t = "<<t<<":"<<endl;
+
+	uold1 = w1; uold2 = w2;
+
+	int i = 0;
+	real error = 1.;
+	
+	while(error > NewtonTol && i < NewtonMaxIter){
+		
+		i++;
+		
+		Newton;
+
+		error = normL2(u1 - uold1, u2 - uold2);
+
+		uold1 = u1;
+		uold2 = u2;
+		
+		cout<<"Newton iteration "<<i<<": error = "<<error<<endl;
+	}
+	
+	w1 = u1; w2 = u2;
+
+	plot(p, cmm="p, t = "+t, value=true);
+	plot([w1, w2], cmm="[u1, u2], t = "+t, value=false);
+
+	if (Iter % (IterMax/10) == 0){
+
+		Mh ux, uy;
+		ux = w1; uy = w2;
+		savevtk(directory + "cavity_"+string(t)+".vtk", Th, [ux, uy, 0.], ux, uy, p, dataname="u u1 u2 p");
+	}
+
+}
+
+plot(p, [w1, w2], value=true, wait=true, cmm="p, [u1, u2], t = "+tmax);
